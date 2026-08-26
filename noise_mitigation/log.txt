@@ -1,0 +1,55 @@
+31 July 2026 - Reference measurements after Alu cover modification for CSM 2 H03, H04, H05 (corner) by Pavel Maly.
+Importante Note: no any copper or alu tapes applied.
+New round RO cables are used: early production 2024 - RO H00, H09, H11 and final production 2026 - all others.
+HV OFF: Hyst 14, Reference scan 108, 110, 112, 114, 116, 118, 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/CSM0023_noise_scan_main_thr_hyst_14_20260731_112725
+
+CSM0023_noise_main_thr_120_hyst_14_20260731_112725/CSM0023_noise_main_thr_120_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_118_hyst_14_20260731_112725/CSM0023_noise_main_thr_118_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_116_hyst_14_20260731_112725/CSM0023_noise_main_thr_116_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_114_hyst_14_20260731_112725/CSM0023_noise_main_thr_114_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_112_hyst_14_20260731_112725/CSM0023_noise_main_thr_112_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_110_hyst_14_20260731_112725/CSM0023_noise_main_thr_110_hyst_14_20260731_112725.dat
+CSM0023_noise_main_thr_108_hyst_14_20260731_112725/CSM0023_noise_main_thr_108_hyst_14_20260731_112725.dat
+
+-----------------------------------------------------------------------------------------
+20 August 2026 - Reference measurement after installation of all cables.
+Important note: still one lose Alu cover plate at CSM2 31, 33 (screws are missing)
+
+HV OFF: Hyst 14, Reference scan 108, 110, 112, 114, 116, 118, 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260820_115737
+
+HV OFF: Hyst 14, Reference scan 114, 115, 116, 117, 118, 119, 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260820_131821
+
+HV OFF: Hyst 14, long reference scan 114
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260820_133215
+
+-----------------------------------------------------------------------------------------
+24 August 2026 - Reference measurement and improvements
+Important note: still one lose Alu cover plate at CSM2 31, 33 (screws are missing)
+
+Reference scan
+HV OFF: Hyst 14, threshhold 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260824_114018
+
+added copper tape at CSM2, 31, 33
+HV OFF: Hyst 14, threshhold 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260824_114817
+
+added copper tape at CSM1, 08, 10, 12, 14 at the bottom
+HV OFF: Hyst 14, threshhold 120
+THR scan data location:
+/home/mpi-mpp-rpc-01/data_BIS78C2_MPP/noise_mitigation_new/
+CSM0023_noise_scan_main_thr_hyst_14_20260824_115548
