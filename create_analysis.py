@@ -27,6 +27,7 @@ from io import StringIO
 import math
 from pathlib import Path
 import re
+import subprocess
 
 
 # Shared geometry for single-measurement and combined noise-rate plots.  The
@@ -73,6 +74,54 @@ EVENT_WINDOW_FIELDS = {
     "event_time_window_ns": 1e-9,
     "acquisition_window_ns": 1e-9,
 }
+
+MINI_DAQ_CONVERTER = Path(
+    "/remote/ceph/user/k/kortner/software/BIS/for_QAQC/scripts/convert_mini_daq.py"
+)
+
+
+def create_root_files_if_needed(input_path: str):
+    """Convert a directory only when it does not contain any ROOT files yet."""
+    path = Path(input_path).expanduser()
+    if not path.is_dir():
+        return
+
+    root_file_count = sum(
+        candidate.is_file() and candidate.suffix.lower() == ".root"
+        for candidate in path.rglob("*")
+    )
+    if root_file_count:
+        print(
+            f"Found {root_file_count} ROOT file(s) below {path}; "
+            "continuing with the analysis."
+        )
+        print()
+        return
+
+    print(f"No ROOT files found below {path}.")
+    if not MINI_DAQ_CONVERTER.parent.is_dir():
+        print(f"Converter directory not found: {MINI_DAQ_CONVERTER.parent}")
+        print("Continuing without ROOT-file conversion.")
+        print()
+        return
+
+    print(f"Converter directory found: {MINI_DAQ_CONVERTER.parent}")
+    print(f"Creating ROOT files with: {MINI_DAQ_CONVERTER}")
+    subprocess.run(
+        ["python3", str(MINI_DAQ_CONVERTER), input_path],
+        check=True,
+    )
+    created_root_files = sum(
+        candidate.is_file() and candidate.suffix.lower() == ".root"
+        for candidate in path.rglob("*")
+    )
+    if not created_root_files:
+        raise RuntimeError(
+            "ROOT-file conversion completed, but no ROOT files were created "
+            f"below {path}."
+        )
+    print(f"Created {created_root_files} ROOT file(s); continuing with the analysis.")
+    print()
 
 
 def run_stem_for_root(path: Path):
@@ -793,7 +842,7 @@ def create_combined_noise_rate_plot(measurements, output_path: Path, logarithmic
 
     rows = len(mezzanine_groups)
     plot_height = RATE_PLOT_ROW_HEIGHT
-    legend_rows = (len(measurements) + 1) // 2
+    legend_rows = len(measurements)
     # The legend contains one header row plus the actual file rows.  Size it to
     # that content instead of leaving a large, mostly empty box below the plots.
     legend_height = 100 + legend_rows * 80
@@ -882,10 +931,10 @@ def create_combined_noise_rate_plot(measurements, output_path: Path, logarithmic
     drawn_objects.append(legend_pad)
     legend = ROOT.TLegend(0.03, 0.06, 0.97, 0.94)
     legend.SetHeader("Measurement files", "C")
-    legend.SetNColumns(2)
-    # Text sizes are relative to the (deliberately short) legend pad.  A larger
-    # value keeps the header and filenames readable in the full-size image.
-    legend.SetTextSize(0.20)
+    legend.SetNColumns(1)
+    # ROOT expresses the text size relative to the legend pad.  Scale it with
+    # the number of rows so every filename keeps its own vertical space.
+    legend.SetTextSize(min(0.20, 0.70 / (legend_rows + 1)))
     legend.SetMargin(0.08)
     for measurement_index, measurement in enumerate(measurements):
         legend_graph = ROOT.TGraph()
@@ -931,7 +980,6 @@ def process_root_group(
     table_buffer = StringIO()
     print_table(combined, table_buffer)
     table_text = table_buffer.getvalue()
-    print(table_text, end="")
 
     output_stem = run_stem_for_root(files[0])
     output_path = files[0].with_name(f"{output_stem}_noise_table.txt")
@@ -1008,6 +1056,7 @@ def main():
         # keeps the original single-measurement behavior, even when the option
         # was supplied.
         combine = "combine=true" in flag_options and input_path.is_dir()
+        create_root_files_if_needed(args.root_file)
         groups = resolve_root_file_groups(args.root_file)
         measurements = []
         for group_index, files in enumerate(groups):
