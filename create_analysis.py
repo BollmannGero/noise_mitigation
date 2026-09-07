@@ -11,8 +11,10 @@ Arguments:
     skala=log                 Optional. Use a logarithmic y-axis for the
                               noise-rate plots. The default is linear.
     combine=True              For a directory, combine all measurements in
-                              combined_noise_rates.png. With a single ROOT
-                              file, the normal single-measurement plot is made.
+                              combined_noise_rates.png and
+                              combined_noise_rates_layers.png. With a single
+                              ROOT file, the normal single-measurement plots
+                              are made.
     time_window_s=<seconds>   Optional fallback for old ROOT files without
                               event-window metadata or a matching hits CSV.
 
@@ -49,6 +51,14 @@ RATE_TITLE_Y = 0.93
 CHANNELS_PER_MEZZANINE = 24
 MEZZANINES_PER_CSM = 20
 MEZZANINES_PER_RATE_PANEL = 6
+LAYER_TUBE_GROUPS = (
+    (1, 5, 9, 13, 17, 21),
+    (0, 4, 8, 12, 16, 20),
+    (3, 7, 11, 15, 19, 23),
+    (2, 6, 10, 14, 18, 22),
+)
+LAYER_RATE_PANEL_COUNT = 8
+LAYER_RATE_FOOTER_HEIGHT = 500
 
 # Analysis categories.  These are deliberate classification limits rather
 # than metadata supplied by a measurement.
@@ -78,6 +88,17 @@ EVENT_WINDOW_FIELDS = {
 MINI_DAQ_CONVERTER = Path(
     "/remote/ceph/user/k/kortner/software/BIS/for_QAQC/scripts/convert_mini_daq.py"
 )
+
+
+def tube_layout_positions():
+    """Return the physical column and row of every tube on a mezzanine."""
+    positions = {}
+    for column in range(CHANNELS_PER_MEZZANINE // 4):
+        positions[4 * column] = (column, 1)
+        positions[4 * column + 1] = (column, 0)
+        positions[4 * column + 2] = (column, 3)
+        positions[4 * column + 3] = (column, 2)
+    return positions
 
 
 def create_root_files_if_needed(input_path: str):
@@ -519,16 +540,7 @@ def create_noise_map(results, root_file: Path):
             return colors["yellow"]
         return colors["quiet"]
 
-    def tube_positions():
-        positions = {}
-        for column in range(CHANNELS_PER_MEZZANINE // 4):
-            positions[4 * column] = (column, 1)
-            positions[4 * column + 1] = (column, 0)
-            positions[4 * column + 2] = (column, 3)
-            positions[4 * column + 3] = (column, 2)
-        return positions
-
-    positions = tube_positions()
+    positions = tube_layout_positions()
     csm_width = 54.0
     mezz_width = 5.7
     mezz_height = 4.0
@@ -952,6 +964,341 @@ def create_combined_noise_rate_plot(measurements, output_path: Path, logarithmic
     return output_path
 
 
+def layer_rate_points(results, mezz_parity, tube_numbers):
+    """Return one physical tube layer across all matching mezzanines."""
+    return [
+        point
+        for segment in layer_rate_point_segments(
+            results, mezz_parity, tube_numbers
+        )
+        for point in segment
+    ]
+
+
+def layer_rate_point_segments(results, mezz_parity, tube_numbers):
+    """Split layer points wherever an unused mezzanine creates a gap."""
+    segments = []
+    current_segment = []
+    for mezz_index, mezz_number in enumerate(
+        range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2)
+    ):
+        csm_name = "CSM0" if mezz_number < MEZZANINES_PER_CSM else "CSM1"
+        mezz_label = f"Mezz{mezz_number:02d}"
+        tube_rates = results.get(csm_name, {}).get(mezz_label)
+        if tube_rates is None:
+            if current_segment:
+                segments.append(current_segment)
+                current_segment = []
+            continue
+        for tube_offset, tube_number in enumerate(tube_numbers):
+            current_segment.append(
+                (
+                    mezz_index * len(tube_numbers) + tube_offset,
+                    tube_rates.get(tube_number, 0.0),
+                )
+            )
+    if current_segment:
+        segments.append(current_segment)
+    return segments
+
+
+def style_layer_rate_frame(ROOT, frame, maximum_rate_hz, axis_divisor, logarithmic):
+    """Set the axes and pad geometry for a tube-layer rate panel."""
+    minimum_rate = (0.1 if logarithmic else 0.0) / axis_divisor
+    maximum_rate = max(1.0, maximum_rate_hz * 1.15) / axis_divisor
+    frame.SetMinimum(minimum_rate)
+    frame.SetMaximum(maximum_rate)
+    frame.SetStats(False)
+
+    pad = ROOT.gPad
+    pad.SetLeftMargin(RATE_LEFT_MARGIN)
+    pad.SetRightMargin(0.06)
+    pad.SetBottomMargin(0.18)
+    pad.SetTopMargin(RATE_TOP_MARGIN)
+    pad.SetLogy(logarithmic)
+    pad.SetGridy()
+
+    x_axis = frame.GetXaxis()
+    x_axis.SetLabelSize(0.0)
+    x_axis.SetTickLength(0.0)
+    y_axis = frame.GetYaxis()
+    y_axis.SetLabelSize(0.032)
+    y_axis.SetTitleSize(0.038)
+    y_axis.SetTitleOffset(0.95)
+    return minimum_rate, maximum_rate
+
+
+def draw_layer_rate_labels(
+    ROOT,
+    mezz_parity,
+    tube_numbers,
+    minimum_rate,
+    maximum_rate,
+    axis_divisor,
+    drawn_objects,
+):
+    """Draw mezzanine labels, separators, threshold and the layer title."""
+    mezz_numbers = list(range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2))
+    tubes_per_layer = len(tube_numbers)
+    panel_points = len(mezz_numbers) * tubes_per_layer
+    right_margin = 0.06
+    plot_width = 1.0 - RATE_LEFT_MARGIN - right_margin
+
+    def x_to_ndc(x_value):
+        return RATE_LEFT_MARGIN + plot_width * (x_value + 0.5) / panel_points
+
+    for mezz_index, mezz_number in enumerate(mezz_numbers):
+        x_start = mezz_index * tubes_per_layer
+        separator = ROOT.TLine(
+            x_start - 0.5, minimum_rate, x_start - 0.5, maximum_rate
+        )
+        separator.SetLineColor(ROOT.kGray + 1)
+        separator.SetLineWidth(1)
+        separator.Draw()
+        drawn_objects.append(separator)
+
+        label = ROOT.TLatex(
+            x_to_ndc(x_start + (tubes_per_layer - 1) / 2),
+            0.150,
+            f"{mezz_number:02d}",
+        )
+        label.SetNDC(True)
+        label.SetTextAlign(23)
+        label.SetTextSize(0.029)
+        label.Draw()
+        drawn_objects.append(label)
+
+    final_separator = ROOT.TLine(
+        panel_points - 0.5,
+        minimum_rate,
+        panel_points - 0.5,
+        maximum_rate,
+    )
+    final_separator.SetLineColor(ROOT.kGray + 1)
+    final_separator.SetLineWidth(1)
+    final_separator.Draw()
+    drawn_objects.append(final_separator)
+
+    x_title = ROOT.TLatex(0.985, 0.150, "Mezz")
+    x_title.SetNDC(True)
+    x_title.SetTextAlign(33)
+    x_title.SetTextSize(0.032)
+    x_title.Draw()
+    drawn_objects.append(x_title)
+
+    threshold_rate = NOISY_RATE_HZ / axis_divisor
+    threshold_line = ROOT.TLine(
+        -0.5, threshold_rate, panel_points - 0.5, threshold_rate
+    )
+    threshold_line.SetLineColor(ROOT.kBlack)
+    threshold_line.SetLineWidth(4)
+    threshold_line.Draw()
+    drawn_objects.append(threshold_line)
+
+    tube_text = ", ".join(str(tube) for tube in tube_numbers)
+    title = ROOT.TLatex(
+        0.02,
+        RATE_TITLE_Y,
+        f"Mezz{mezz_parity:02d}+2n, Tubes {tube_text}",
+    )
+    title.SetNDC(True)
+    title.SetTextSize(0.052)
+    title.SetTextFont(62)
+    title.Draw()
+    drawn_objects.append(title)
+
+
+def draw_tube_numbering_footer(ROOT, pad, drawn_objects):
+    """Draw the physical 24-tube numbering below the layer plots."""
+    pad.cd()
+    pad.SetMargin(0.0, 0.0, 0.0, 0.0)
+    pad.Range(0.0, 0.0, 30.0, 5.0)
+
+    title = ROOT.TLatex(15.0, 4.05, "Tube numbering")
+    title.SetTextAlign(22)
+    title.SetTextSize(0.075)
+    title.SetTextFont(62)
+    title.Draw()
+    drawn_objects.append(title)
+
+    for tube_number, (column, row) in tube_layout_positions().items():
+        x = 13.155 + column * 0.82 - (0.41 if row in (1, 3) else 0.0)
+        y = 0.65 + (3 - row) * 0.82
+        circle = ROOT.TEllipse(x, y, 0.36, 0.36)
+        circle.SetFillColor(ROOT.kWhite)
+        circle.SetLineColor(ROOT.kGray + 2)
+        circle.SetLineWidth(2)
+        circle.Draw()
+        drawn_objects.append(circle)
+
+        label = ROOT.TLatex(x, y - 0.06, str(tube_number))
+        label.SetTextAlign(22)
+        label.SetTextSize(0.042)
+        label.Draw()
+        drawn_objects.append(label)
+
+
+def create_layer_noise_rate_plot(
+    measurements,
+    output_path: Path,
+    logarithmic=False,
+    combined=False,
+):
+    """Create eight rate panels ordered by mezzanine parity and tube layer."""
+    ROOT = root_module()
+    panels = [
+        (mezz_parity, tube_numbers)
+        for mezz_parity in (1, 0)
+        for tube_numbers in LAYER_TUBE_GROUPS
+    ]
+    legend_rows = len(measurements) if combined else 0
+    legend_height = 100 + legend_rows * 80 if combined else 0
+    canvas_height = (
+        LAYER_RATE_PANEL_COUNT * RATE_PLOT_ROW_HEIGHT
+        + legend_height
+        + LAYER_RATE_FOOTER_HEIGHT
+    )
+    canvas_name = "combined_noise_rates_layers" if combined else "noise_rates_layers"
+    canvas = ROOT.TCanvas(
+        canvas_name,
+        "Noise rates by tube layer",
+        RATE_PLOT_WIDTH,
+        canvas_height,
+    )
+
+    if combined:
+        colors = []
+        for measurement_index in range(len(measurements)):
+            hue = measurement_index / max(1, len(measurements))
+            red, green, blue = colorsys.hsv_to_rgb(hue, 0.80, 0.85)
+            colors.append(
+                ROOT.TColor.GetColor(
+                    f"#{int(red * 255):02x}{int(green * 255):02x}{int(blue * 255):02x}"
+                )
+            )
+    else:
+        colors = [ROOT.kBlue + 1]
+
+    drawn_objects = []
+    plot_base = LAYER_RATE_FOOTER_HEIGHT + legend_height
+    for panel_index, (mezz_parity, tube_numbers) in enumerate(panels):
+        y_low = (
+            plot_base
+            + (LAYER_RATE_PANEL_COUNT - panel_index - 1) * RATE_PLOT_ROW_HEIGHT
+        ) / canvas_height
+        y_high = (
+            plot_base
+            + (LAYER_RATE_PANEL_COUNT - panel_index) * RATE_PLOT_ROW_HEIGHT
+        ) / canvas_height
+        plot_pad = ROOT.TPad(
+            f"{canvas_name}_plot_{panel_index}", "", 0.0, y_low, 1.0, y_high
+        )
+        canvas.cd()
+        plot_pad.Draw()
+        plot_pad.cd()
+        drawn_objects.append(plot_pad)
+
+        segment_series = [
+            layer_rate_point_segments(
+                measurement["results"], mezz_parity, tube_numbers
+            )
+            for measurement in measurements
+        ]
+        maximum_rate = max(
+            (
+                rate_hz
+                for segments in segment_series
+                for segment in segments
+                for _, rate_hz in segment
+            ),
+            default=0.0,
+        )
+        axis_divisor, axis_unit = rate_axis_unit(maximum_rate)
+        point_count = MEZZANINES_PER_CSM * len(tube_numbers)
+        frame = ROOT.TH1F(
+            f"{canvas_name}_frame_{panel_index}",
+            f";;Noise rate [{axis_unit}]",
+            point_count,
+            -0.5,
+            point_count - 0.5,
+        )
+        frame.SetDirectory(0)
+        minimum_rate, maximum_plot_rate = style_layer_rate_frame(
+            ROOT, frame, maximum_rate, axis_divisor, logarithmic
+        )
+        frame.Draw("AXIS")
+        drawn_objects.append(frame)
+
+        for measurement_index, segments in enumerate(segment_series):
+            for points in segments:
+                graph = ROOT.TGraph(len(points))
+                for point_index, (x_value, rate_hz) in enumerate(points):
+                    graph.SetPoint(point_index, x_value, rate_hz / axis_divisor)
+                color = colors[measurement_index % len(colors)]
+                graph.SetLineColor(color)
+                graph.SetMarkerColor(color)
+                graph.SetMarkerStyle(20)
+                graph.SetMarkerSize(0.8)
+                graph.Draw("LP SAME")
+                drawn_objects.append(graph)
+
+        draw_layer_rate_labels(
+            ROOT,
+            mezz_parity,
+            tube_numbers,
+            minimum_rate,
+            maximum_plot_rate,
+            axis_divisor,
+            drawn_objects,
+        )
+
+    if combined:
+        legend_pad = ROOT.TPad(
+            f"{canvas_name}_legend",
+            "",
+            0.0,
+            LAYER_RATE_FOOTER_HEIGHT / canvas_height,
+            1.0,
+            (LAYER_RATE_FOOTER_HEIGHT + legend_height) / canvas_height,
+        )
+        canvas.cd()
+        legend_pad.Draw()
+        legend_pad.cd()
+        drawn_objects.append(legend_pad)
+        legend = ROOT.TLegend(0.03, 0.06, 0.97, 0.94)
+        legend.SetHeader("Measurement files", "C")
+        legend.SetNColumns(1)
+        legend.SetTextSize(min(0.20, 0.70 / (legend_rows + 1)))
+        legend.SetMargin(0.08)
+        for measurement_index, measurement in enumerate(measurements):
+            legend_graph = ROOT.TGraph()
+            color = colors[measurement_index % len(colors)]
+            legend_graph.SetLineColor(color)
+            legend_graph.SetMarkerColor(color)
+            legend_graph.SetMarkerStyle(20)
+            legend.AddEntry(legend_graph, measurement["label"], "LP")
+            drawn_objects.append(legend_graph)
+        legend.Draw()
+        drawn_objects.append(legend)
+
+    footer_pad = ROOT.TPad(
+        f"{canvas_name}_tube_numbering",
+        "",
+        0.0,
+        0.0,
+        1.0,
+        LAYER_RATE_FOOTER_HEIGHT / canvas_height,
+    )
+    canvas.cd()
+    footer_pad.Draw()
+    drawn_objects.append(footer_pad)
+    draw_tube_numbering_footer(ROOT, footer_pad, drawn_objects)
+
+    canvas.SaveAs(str(output_path))
+    canvas.Close()
+    return output_path
+
+
 def process_root_group(
     files,
     logarithmic=False,
@@ -1007,6 +1354,15 @@ def process_root_group(
     if create_rate_plot:
         noise_rates_path = create_noise_rate_plot(combined, files[0], logarithmic)
         print(f"Noise-rate plot written to: {noise_rates_path}")
+        layer_rates_path = files[0].with_name(
+            f"{output_stem}_noise_rates_layers.png"
+        )
+        create_layer_noise_rate_plot(
+            [{"results": combined, "label": files[0].name}],
+            layer_rates_path,
+            logarithmic,
+        )
+        print(f"Layer noise-rate plot written to: {layer_rates_path}")
     return combined
 
 
@@ -1024,7 +1380,7 @@ def main():
         nargs="*",
         help=(
             "Optional arguments: skala=log for logarithmic y-axes; "
-            "combine=True for one combined noise-rate plot; "
+            "combine=True for combined noise-rate plots; "
             "time_window_s=<seconds> as an explicit metadata fallback."
         ),
     )
@@ -1075,6 +1431,19 @@ def main():
                 measurements, combined_output_path, logarithmic
             )
             print(f"Combined noise-rate plot written to: {combined_path}")
+            combined_layers_output_path = (
+                input_path / "combined_noise_rates_layers.png"
+            )
+            combined_layers_path = create_layer_noise_rate_plot(
+                measurements,
+                combined_layers_output_path,
+                logarithmic,
+                combined=True,
+            )
+            print(
+                "Combined layer noise-rate plot written to: "
+                f"{combined_layers_path}"
+            )
     except Exception as exc:
         print(f"Error: {exc}", flush=True)
         raise SystemExit(1)

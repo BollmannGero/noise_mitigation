@@ -60,6 +60,14 @@ Die Ergebnisse werden neben den jeweiligen ROOT-Dateien gespeichert:
 - `<messung>_noise_map.png`: grafische Übersicht der Tubes. Die Farben
   unterscheiden Raten bis 1 kHz, über 1 kHz, über 10 kHz und über 100 kHz.
 - `<messung>_noise_rates.png`: Noise-Rate-Plot für eine einzelne Messung.
+- `<messung>_noise_rates_layers.png`: acht Noise-Rate-Plots, angeordnet nach
+  den vier physischen Tube-Layern. Zuerst werden die ungeraden Mezzanines und
+  danach die geraden Mezzanines dargestellt. Die Layer enthalten nacheinander
+  die Tubes `1, 5, 9, 13, 17, 21`, `0, 4, 8, 12, 16, 20`,
+  `3, 7, 11, 15, 19, 23` und `2, 6, 10, 14, 18, 22`. Die x-Achse zeigt nur
+  die jeweilige Mezzanine-Nummer. Bei nicht verwendeten Mezzanines wird die
+  Verbindungslinie unterbrochen. Am unteren Bildrand ist zusätzlich die
+  physische Tube-Nummerierung eingezeichnet.
 
 Die gefundenen Eingabedateien, das verwendete Event-Zeitfenster und die Pfade
 der erzeugten Dateien werden im Terminal ausgegeben. Die vollständigen
@@ -70,8 +78,10 @@ aufgelistet.
 
 - `skala=log` verwendet eine logarithmische y-Achse für die Noise-Rate-Plots.
 - `combine=True` erzeugt bei einem Ordner einen gemeinsamen Vergleichsplot
-  `combined_noise_rates.png` im angegebenen Ordner. Die einzelnen
-  `_noise_rates.png`-Plots werden in diesem Fall nicht erzeugt.
+  `combined_noise_rates.png` und den nach Tube-Layern angeordneten Plot
+  `combined_noise_rates_layers.png` im angegebenen Ordner. Die einzelnen
+  `_noise_rates.png`- und `_noise_rates_layers.png`-Plots werden in diesem Fall
+  nicht erzeugt.
 - `time_window_s=<sekunden>` gibt das Event-Zeitfenster ausdrücklich vor und
   wird verwendet, wenn es nicht zuverlässig aus den Messdateien gelesen
   werden kann.
