@@ -51,23 +51,36 @@ mit `time_window_s=<sekunden>` angegeben werden.
 
 ## Erzeugte Dateien
 
-Die Ergebnisse werden neben den jeweiligen ROOT-Dateien gespeichert:
+Im Ordner jeder Messung wird automatisch der Unterordner `results_analysis`
+erstellt. Alle Ergebnisse dieser Messung werden dort gespeichert:
+
+- Bei einer direkt angegebenen ROOT-Datei liegt `results_analysis` im selben
+  Ordner wie diese ROOT-Datei.
+- Bei einem Ordnerargument werden alle Unterordner rekursiv durchsucht. Für
+  jede gefundene Messung wird `results_analysis` direkt in dem Ordner erstellt,
+  in dem die zugehörigen CSM0/CSM1-Dateien liegen.
 
 - `<messung>_noise_table.txt`: alle gemessenen Noise-Raten in Hz, sortiert
   nach CSM, Mezzanine und Tube.
 - `<messung>_noise_table_high.txt`: nur Tubes mit einer Noise-Rate über
   1 kHz.
-- `<messung>_noise_map.png`: grafische Übersicht der Tubes. Die Farben
+- `<messung>_noise_map.png` und `.svg`: grafische Übersicht der Tubes. Die Farben
   unterscheiden Raten bis 1 kHz, über 1 kHz, über 10 kHz und über 100 kHz.
-- `<messung>_noise_rates.png`: Noise-Rate-Plot für eine einzelne Messung.
-- `<messung>_noise_rates_layers.png`: acht Noise-Rate-Plots, angeordnet nach
+- `<messung>_noise_rates.png` und `.svg`: Noise-Rate-Plot für eine einzelne
+  Messung.
+- `<messung>_noise_rates_layers.png` und `.svg`: acht Noise-Rate-Plots, angeordnet nach
   den vier physischen Tube-Layern. Zuerst werden die ungeraden Mezzanines und
   danach die geraden Mezzanines dargestellt. Die Layer enthalten nacheinander
   die Tubes `1, 5, 9, 13, 17, 21`, `0, 4, 8, 12, 16, 20`,
   `3, 7, 11, 15, 19, 23` und `2, 6, 10, 14, 18, 22`. Die x-Achse zeigt nur
   die jeweilige Mezzanine-Nummer. Bei nicht verwendeten Mezzanines wird die
-  Verbindungslinie unterbrochen. Am unteren Bildrand ist zusätzlich die
-  physische Tube-Nummerierung eingezeichnet.
+  Verbindungslinie unterbrochen und die Nummer ausgeblendet. Die leeren
+  Positionen 18, 19, 38 und 39 werden vollständig entfernt.
+
+Alle Grafiken werden automatisch sowohl als PNG als auch als SVG mit gleichem
+Dateinamen gespeichert. Beim SVG-Export werden Canvas-Abmessungen und
+Linienbreiten an die PNG-Darstellung angepasst, damit beide Formate dieselben
+Proportionen und Skalierungen zeigen.
 
 Die gefundenen Eingabedateien, das verwendete Event-Zeitfenster und die Pfade
 der erzeugten Dateien werden im Terminal ausgegeben. Die vollständigen
@@ -79,9 +92,11 @@ aufgelistet.
 - `skala=log` verwendet eine logarithmische y-Achse für die Noise-Rate-Plots.
 - `combine=True` erzeugt bei einem Ordner einen gemeinsamen Vergleichsplot
   `combined_noise_rates.png` und den nach Tube-Layern angeordneten Plot
-  `combined_noise_rates_layers.png` im angegebenen Ordner. Die einzelnen
-  `_noise_rates.png`- und `_noise_rates_layers.png`-Plots werden in diesem Fall
-  nicht erzeugt.
+  `combined_noise_rates_layers.png`. Zuerst wird für jede Messung die komplette
+  Einzelanalyse in ihrem jeweiligen `results_analysis`-Ordner ausgeführt.
+  Anschließend werden die kombinierten Grafiken zusätzlich als PNG und SVG
+  direkt im ursprünglich angegebenen Ordner gespeichert. Dieser Ordner darf
+  mehrere Unterordner mit den einzelnen Messungen enthalten.
 - `time_window_s=<sekunden>` gibt das Event-Zeitfenster ausdrücklich vor und
   wird verwendet, wenn es nicht zuverlässig aus den Messdateien gelesen
   werden kann.

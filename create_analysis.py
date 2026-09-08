@@ -29,7 +29,9 @@ from io import StringIO
 import math
 from pathlib import Path
 import re
+import struct
 import subprocess
+import xml.etree.ElementTree as ET
 
 
 # Shared geometry for single-measurement and combined noise-rate plots.  The
@@ -58,7 +60,8 @@ LAYER_TUBE_GROUPS = (
     (2, 6, 10, 14, 18, 22),
 )
 LAYER_RATE_PANEL_COUNT = 8
-LAYER_RATE_FOOTER_HEIGHT = 500
+REMOVABLE_EMPTY_MEZZANINES = {18, 19, 38, 39}
+RESULTS_DIRECTORY_NAME = "results_analysis"
 
 # Analysis categories.  These are deliberate classification limits rather
 # than metadata supplied by a measurement.
@@ -99,6 +102,75 @@ def tube_layout_positions():
         positions[4 * column + 2] = (column, 3)
         positions[4 * column + 3] = (column, 2)
     return positions
+
+
+def analysis_results_directory(parent: Path):
+    """Create and return the directory used for generated analysis files."""
+    output_directory = parent / RESULTS_DIRECTORY_NAME
+    output_directory.mkdir(exist_ok=True)
+    return output_directory
+
+
+def analysis_output_path(root_file: Path, suffix: str):
+    """Return an output path below the ROOT file's analysis directory."""
+    return analysis_results_directory(root_file.parent) / (
+        f"{run_stem_for_root(root_file)}{suffix}"
+    )
+
+
+def save_canvas_outputs(canvas, png_path: Path):
+    """Save one ROOT canvas as both PNG and SVG using the same stem."""
+    svg_path = png_path.with_suffix(".svg")
+    canvas.SaveAs(str(png_path))
+    canvas.SaveAs(str(svg_path))
+    normalize_root_svg(svg_path, png_path)
+    return png_path, svg_path
+
+
+def png_dimensions(png_path: Path):
+    """Read width and height from a PNG header."""
+    with png_path.open("rb") as png_file:
+        header = png_file.read(24)
+    if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"Invalid PNG file: {png_path}")
+    return struct.unpack(">II", header[16:24])
+
+
+def normalize_root_svg(svg_path: Path, png_path: Path):
+    """Match ROOT's SVG dimensions and stroke scaling to its PNG output."""
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    tree = ET.parse(svg_path)
+    root = tree.getroot()
+    png_width, png_height = png_dimensions(png_path)
+    svg_width = float(root.attrib["width"])
+    svg_height = float(root.attrib["height"])
+    width_scale = png_width / svg_width
+    height_scale = png_height / svg_height
+    stroke_scale = math.sqrt(width_scale * height_scale)
+
+    root.set("width", str(png_width))
+    root.set("height", str(png_height))
+    root.set("preserveAspectRatio", "none")
+    root.set("shape-rendering", "geometricPrecision")
+
+    for element in root.iter():
+        stroke = element.get("stroke")
+        if stroke is None or stroke == "none":
+            continue
+        stroke_width = float(element.get("stroke-width", "1"))
+        element.set("stroke-width", f"{stroke_width / stroke_scale:.6g}")
+        dash_pattern = element.get("stroke-dasharray")
+        if dash_pattern:
+            dash_values = re.findall(r"[-+]?(?:\d*\.\d+|\d+)", dash_pattern)
+            element.set(
+                "stroke-dasharray",
+                ",".join(
+                    f"{float(value) / stroke_scale:.6g}"
+                    for value in dash_values
+                ),
+            )
+
+    tree.write(svg_path, encoding="unicode", xml_declaration=True)
 
 
 def create_root_files_if_needed(input_path: str):
@@ -624,8 +696,8 @@ def create_noise_map(results, root_file: Path):
         draw_circle(x, y, 0.36, ROOT.kWhite, ROOT.kGray + 2, 2)
         draw_text(str(tube_number), x, y - 0.055, 0.018, 22)
 
-    output_path = root_file.with_name(f"{run_stem_for_root(root_file)}_noise_map.png")
-    canvas.SaveAs(str(output_path))
+    output_path = analysis_output_path(root_file, "_noise_map.png")
+    save_canvas_outputs(canvas, output_path)
     canvas.Close()
     return output_path
 
@@ -820,10 +892,8 @@ def create_noise_rate_plot(results, root_file: Path, logarithmic=False):
             drawn_objects,
         )
 
-    output_path = root_file.with_name(
-        f"{run_stem_for_root(root_file)}_noise_rates.png"
-    )
-    canvas.SaveAs(str(output_path))
+    output_path = analysis_output_path(root_file, "_noise_rates.png")
+    save_canvas_outputs(canvas, output_path)
     canvas.Close()
     return output_path
 
@@ -959,29 +1029,57 @@ def create_combined_noise_rate_plot(measurements, output_path: Path, logarithmic
     legend.Draw()
     drawn_objects.append(legend)
 
-    canvas.SaveAs(str(output_path))
+    save_canvas_outputs(canvas, output_path)
     canvas.Close()
     return output_path
 
 
-def layer_rate_points(results, mezz_parity, tube_numbers):
+def measurement_uses_mezzanine(results, mezz_number):
+    """Return whether a measurement contains the selected mezzanine."""
+    csm_name = "CSM0" if mezz_number < MEZZANINES_PER_CSM else "CSM1"
+    return f"Mezz{mezz_number:02d}" in results.get(csm_name, {})
+
+
+def layer_mezzanine_layout(measurements, mezz_parity):
+    """Return displayed and labelled mezzanines for one parity."""
+    all_mezzanines = list(range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2))
+    used_mezzanines = {
+        mezz_number
+        for mezz_number in all_mezzanines
+        if any(
+            measurement_uses_mezzanine(measurement["results"], mezz_number)
+            for measurement in measurements
+        )
+    }
+    displayed_mezzanines = [
+        mezz_number
+        for mezz_number in all_mezzanines
+        if mezz_number not in REMOVABLE_EMPTY_MEZZANINES
+        or mezz_number in used_mezzanines
+    ]
+    return displayed_mezzanines, used_mezzanines
+
+
+def layer_rate_points(results, mezz_parity, tube_numbers, mezz_numbers=None):
     """Return one physical tube layer across all matching mezzanines."""
     return [
         point
         for segment in layer_rate_point_segments(
-            results, mezz_parity, tube_numbers
+            results, mezz_parity, tube_numbers, mezz_numbers
         )
         for point in segment
     ]
 
 
-def layer_rate_point_segments(results, mezz_parity, tube_numbers):
+def layer_rate_point_segments(
+    results, mezz_parity, tube_numbers, mezz_numbers=None
+):
     """Split layer points wherever an unused mezzanine creates a gap."""
+    if mezz_numbers is None:
+        mezz_numbers = range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2)
     segments = []
     current_segment = []
-    for mezz_index, mezz_number in enumerate(
-        range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2)
-    ):
+    for mezz_index, mezz_number in enumerate(mezz_numbers):
         csm_name = "CSM0" if mezz_number < MEZZANINES_PER_CSM else "CSM1"
         mezz_label = f"Mezz{mezz_number:02d}"
         tube_rates = results.get(csm_name, {}).get(mezz_label)
@@ -1031,6 +1129,8 @@ def style_layer_rate_frame(ROOT, frame, maximum_rate_hz, axis_divisor, logarithm
 def draw_layer_rate_labels(
     ROOT,
     mezz_parity,
+    mezz_numbers,
+    used_mezz_numbers,
     tube_numbers,
     minimum_rate,
     maximum_rate,
@@ -1038,7 +1138,6 @@ def draw_layer_rate_labels(
     drawn_objects,
 ):
     """Draw mezzanine labels, separators, threshold and the layer title."""
-    mezz_numbers = list(range(mezz_parity, 2 * MEZZANINES_PER_CSM, 2))
     tubes_per_layer = len(tube_numbers)
     panel_points = len(mezz_numbers) * tubes_per_layer
     right_margin = 0.06
@@ -1057,16 +1156,17 @@ def draw_layer_rate_labels(
         separator.Draw()
         drawn_objects.append(separator)
 
-        label = ROOT.TLatex(
-            x_to_ndc(x_start + (tubes_per_layer - 1) / 2),
-            0.150,
-            f"{mezz_number:02d}",
-        )
-        label.SetNDC(True)
-        label.SetTextAlign(23)
-        label.SetTextSize(0.029)
-        label.Draw()
-        drawn_objects.append(label)
+        if mezz_number in used_mezz_numbers:
+            label = ROOT.TLatex(
+                x_to_ndc(x_start + (tubes_per_layer - 1) / 2),
+                0.150,
+                f"{mezz_number:02d}",
+            )
+            label.SetNDC(True)
+            label.SetTextAlign(23)
+            label.SetTextSize(0.029)
+            label.Draw()
+            drawn_objects.append(label)
 
     final_separator = ROOT.TLine(
         panel_points - 0.5,
@@ -1108,36 +1208,6 @@ def draw_layer_rate_labels(
     drawn_objects.append(title)
 
 
-def draw_tube_numbering_footer(ROOT, pad, drawn_objects):
-    """Draw the physical 24-tube numbering below the layer plots."""
-    pad.cd()
-    pad.SetMargin(0.0, 0.0, 0.0, 0.0)
-    pad.Range(0.0, 0.0, 30.0, 5.0)
-
-    title = ROOT.TLatex(15.0, 4.05, "Tube numbering")
-    title.SetTextAlign(22)
-    title.SetTextSize(0.075)
-    title.SetTextFont(62)
-    title.Draw()
-    drawn_objects.append(title)
-
-    for tube_number, (column, row) in tube_layout_positions().items():
-        x = 13.155 + column * 0.82 - (0.41 if row in (1, 3) else 0.0)
-        y = 0.65 + (3 - row) * 0.82
-        circle = ROOT.TEllipse(x, y, 0.36, 0.36)
-        circle.SetFillColor(ROOT.kWhite)
-        circle.SetLineColor(ROOT.kGray + 2)
-        circle.SetLineWidth(2)
-        circle.Draw()
-        drawn_objects.append(circle)
-
-        label = ROOT.TLatex(x, y - 0.06, str(tube_number))
-        label.SetTextAlign(22)
-        label.SetTextSize(0.042)
-        label.Draw()
-        drawn_objects.append(label)
-
-
 def create_layer_noise_rate_plot(
     measurements,
     output_path: Path,
@@ -1153,11 +1223,7 @@ def create_layer_noise_rate_plot(
     ]
     legend_rows = len(measurements) if combined else 0
     legend_height = 100 + legend_rows * 80 if combined else 0
-    canvas_height = (
-        LAYER_RATE_PANEL_COUNT * RATE_PLOT_ROW_HEIGHT
-        + legend_height
-        + LAYER_RATE_FOOTER_HEIGHT
-    )
+    canvas_height = LAYER_RATE_PANEL_COUNT * RATE_PLOT_ROW_HEIGHT + legend_height
     canvas_name = "combined_noise_rates_layers" if combined else "noise_rates_layers"
     canvas = ROOT.TCanvas(
         canvas_name,
@@ -1180,8 +1246,11 @@ def create_layer_noise_rate_plot(
         colors = [ROOT.kBlue + 1]
 
     drawn_objects = []
-    plot_base = LAYER_RATE_FOOTER_HEIGHT + legend_height
+    plot_base = legend_height
     for panel_index, (mezz_parity, tube_numbers) in enumerate(panels):
+        mezz_numbers, used_mezz_numbers = layer_mezzanine_layout(
+            measurements, mezz_parity
+        )
         y_low = (
             plot_base
             + (LAYER_RATE_PANEL_COUNT - panel_index - 1) * RATE_PLOT_ROW_HEIGHT
@@ -1200,7 +1269,10 @@ def create_layer_noise_rate_plot(
 
         segment_series = [
             layer_rate_point_segments(
-                measurement["results"], mezz_parity, tube_numbers
+                measurement["results"],
+                mezz_parity,
+                tube_numbers,
+                mezz_numbers,
             )
             for measurement in measurements
         ]
@@ -1214,7 +1286,7 @@ def create_layer_noise_rate_plot(
             default=0.0,
         )
         axis_divisor, axis_unit = rate_axis_unit(maximum_rate)
-        point_count = MEZZANINES_PER_CSM * len(tube_numbers)
+        point_count = len(mezz_numbers) * len(tube_numbers)
         frame = ROOT.TH1F(
             f"{canvas_name}_frame_{panel_index}",
             f";;Noise rate [{axis_unit}]",
@@ -1226,7 +1298,7 @@ def create_layer_noise_rate_plot(
         minimum_rate, maximum_plot_rate = style_layer_rate_frame(
             ROOT, frame, maximum_rate, axis_divisor, logarithmic
         )
-        frame.Draw("AXIS")
+        frame.Draw()
         drawn_objects.append(frame)
 
         for measurement_index, segments in enumerate(segment_series):
@@ -1245,6 +1317,8 @@ def create_layer_noise_rate_plot(
         draw_layer_rate_labels(
             ROOT,
             mezz_parity,
+            mezz_numbers,
+            used_mezz_numbers,
             tube_numbers,
             minimum_rate,
             maximum_plot_rate,
@@ -1257,9 +1331,9 @@ def create_layer_noise_rate_plot(
             f"{canvas_name}_legend",
             "",
             0.0,
-            LAYER_RATE_FOOTER_HEIGHT / canvas_height,
+            0.0,
             1.0,
-            (LAYER_RATE_FOOTER_HEIGHT + legend_height) / canvas_height,
+            legend_height / canvas_height,
         )
         canvas.cd()
         legend_pad.Draw()
@@ -1281,20 +1355,7 @@ def create_layer_noise_rate_plot(
         legend.Draw()
         drawn_objects.append(legend)
 
-    footer_pad = ROOT.TPad(
-        f"{canvas_name}_tube_numbering",
-        "",
-        0.0,
-        0.0,
-        1.0,
-        LAYER_RATE_FOOTER_HEIGHT / canvas_height,
-    )
-    canvas.cd()
-    footer_pad.Draw()
-    drawn_objects.append(footer_pad)
-    draw_tube_numbering_footer(ROOT, footer_pad, drawn_objects)
-
-    canvas.SaveAs(str(output_path))
+    save_canvas_outputs(canvas, output_path)
     canvas.Close()
     return output_path
 
@@ -1302,7 +1363,6 @@ def create_layer_noise_rate_plot(
 def process_root_group(
     files,
     logarithmic=False,
-    create_rate_plot=True,
     event_window_override_s=None,
 ):
     """Create tables and maps for one CSM0/CSM1 measurement group."""
@@ -1329,7 +1389,9 @@ def process_root_group(
     table_text = table_buffer.getvalue()
 
     output_stem = run_stem_for_root(files[0])
-    output_path = files[0].with_name(f"{output_stem}_noise_table.txt")
+    output_directory = analysis_results_directory(files[0].parent)
+    print(f"Analysis results directory: {output_directory}")
+    output_path = output_directory / f"{output_stem}_noise_table.txt"
     output_path.write_text(table_text, encoding="utf-8")
     print(f"Table written to: {output_path}")
     high_buffer = StringIO()
@@ -1346,23 +1408,26 @@ def process_root_group(
         for csm_name, mezz_map in combined.items()
     }
     print_table(high_results, high_buffer)
-    high_table_path = files[0].with_name(f"{output_stem}_noise_table_high.txt")
+    high_table_path = output_directory / f"{output_stem}_noise_table_high.txt"
     high_table_path.write_text(high_buffer.getvalue(), encoding="utf-8")
     print(f"High-noise table written to: {high_table_path}")
     map_path = create_noise_map(combined, files[0])
-    print(f"Noise map written to: {map_path}")
-    if create_rate_plot:
-        noise_rates_path = create_noise_rate_plot(combined, files[0], logarithmic)
-        print(f"Noise-rate plot written to: {noise_rates_path}")
-        layer_rates_path = files[0].with_name(
-            f"{output_stem}_noise_rates_layers.png"
-        )
-        create_layer_noise_rate_plot(
-            [{"results": combined, "label": files[0].name}],
-            layer_rates_path,
-            logarithmic,
-        )
-        print(f"Layer noise-rate plot written to: {layer_rates_path}")
+    print(f"Noise map written to: {map_path} and {map_path.with_suffix('.svg')}")
+    noise_rates_path = create_noise_rate_plot(combined, files[0], logarithmic)
+    print(
+        f"Noise-rate plot written to: {noise_rates_path} and "
+        f"{noise_rates_path.with_suffix('.svg')}"
+    )
+    layer_rates_path = output_directory / f"{output_stem}_noise_rates_layers.png"
+    create_layer_noise_rate_plot(
+        [{"results": combined, "label": files[0].name}],
+        layer_rates_path,
+        logarithmic,
+    )
+    print(
+        f"Layer noise-rate plot written to: {layer_rates_path} and "
+        f"{layer_rates_path.with_suffix('.svg')}"
+    )
     return combined
 
 
@@ -1421,7 +1486,6 @@ def main():
             results = process_root_group(
                 files,
                 logarithmic,
-                not combine,
                 event_window_override_s,
             )
             measurements.append({"results": results, "label": files[0].name})
@@ -1430,7 +1494,10 @@ def main():
             combined_path = create_combined_noise_rate_plot(
                 measurements, combined_output_path, logarithmic
             )
-            print(f"Combined noise-rate plot written to: {combined_path}")
+            print(
+                f"Combined noise-rate plot written to: {combined_path} and "
+                f"{combined_path.with_suffix('.svg')}"
+            )
             combined_layers_output_path = (
                 input_path / "combined_noise_rates_layers.png"
             )
@@ -1442,7 +1509,8 @@ def main():
             )
             print(
                 "Combined layer noise-rate plot written to: "
-                f"{combined_layers_path}"
+                f"{combined_layers_path} and "
+                f"{combined_layers_path.with_suffix('.svg')}"
             )
     except Exception as exc:
         print(f"Error: {exc}", flush=True)
